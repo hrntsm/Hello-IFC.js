@@ -1,0 +1,20 @@
+{
+  "name": "hello-ifcjs",
+  "version": "0.1.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "build": "rollup -c ./rollup.config.js",
+    "watch": "rollup -c ./rollup.config.js -w"
+  },
+  "author": "hrntsm",
+  "license": "MIT",
+  "dependencies": {
+    "three": "^0.138.3",
+    "web-ifc-three": "^0.0.106"
+  },
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^13.1.3",
+    "rollup": "^2.69.2"
+  }
+}
