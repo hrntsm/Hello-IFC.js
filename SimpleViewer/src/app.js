@@ -9,10 +9,10 @@ import {
 } from "three";
 import {
     OrbitControls
-} from "three/examples/jsm/controls/OrbitControls.js";
+} from "three/examples/jsm/controls/OrbitControls";
 import {
     IFCLoader
-} from "web-ifc-three/IFCLoader.js";
+} from "web-ifc-three/IFCLoader";
 
 // Three.jsのシーンを作成します。
 const scene = new Scene();

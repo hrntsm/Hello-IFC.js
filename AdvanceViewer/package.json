@@ -10,7 +10,7 @@
   "author": "hrntsm",
   "license": "MIT",
   "dependencies": {
-    "three": "^0.138.3",
+    "three": "0.135",
     "three-mesh-bvh": "^0.5.5",
     "web-ifc-three": "^0.0.106"
   },

@@ -1,3 +1,5 @@
+'use strict';
+
 var NavigationModes;
 (function (NavigationModes) {
     NavigationModes[NavigationModes["Orbit"] = 0] = "Orbit";
@@ -14,7 +16,6 @@ class IfcComponent {
         context.addComponent(this);
     }
     update(_delta) { }
-    dispose() { }
 }
 var dimension;
 (function (dimension) {
@@ -57838,17 +57839,48 @@ class ClippingEdges {
         generatorGeometry.setAttribute('position', linePosAttr);
         return generatorGeometry;
     }
-    remove() {
-        const edges = Object.values(this.edges);
-        edges.forEach((edge) => {
+    dispose() {
+        Object.values(this.edges).forEach((edge) => {
+            if (edge.generatorGeometry.boundsTree)
+                edge.generatorGeometry.disposeBoundsTree();
             edge.generatorGeometry.dispose();
+            if (edge.mesh.geometry.boundsTree)
+                edge.mesh.geometry.disposeBoundsTree();
             edge.mesh.geometry.dispose();
-            // @ts-ignore
-            edge.mesh.geometry = undefined;
-            if (edge.mesh.parent) {
-                edge.mesh.removeFromParent();
-            }
+            edge.mesh.removeFromParent();
+            edge.mesh = null;
         });
+        this.edges = null;
+        this.context = null;
+        this.clippingPlane = null;
+        this.ifc = null;
+    }
+    disposeStylesAndHelpers() {
+        if (ClippingEdges.basicEdges) {
+            ClippingEdges.basicEdges.removeFromParent();
+            ClippingEdges.basicEdges.geometry.dispose();
+            ClippingEdges.basicEdges = null;
+        }
+        if (!ClippingEdges.styles)
+            return;
+        const styles = Object.values(ClippingEdges.styles);
+        styles.forEach((style) => {
+            style.ids.length = 0;
+            style.meshes.forEach((mesh) => {
+                mesh.removeFromParent();
+                mesh.geometry.dispose();
+                if (mesh.geometry.boundsTree)
+                    mesh.geometry.disposeBoundsTree();
+                if (Array.isArray(mesh.material))
+                    mesh.material.forEach((mat) => mat.dispose());
+                else
+                    mesh.material.dispose();
+            });
+            style.meshes.length = 0;
+            style.categories.length = 0;
+            style.material.dispose();
+        });
+        ClippingEdges.styles = null;
     }
     async updateEdges() {
         if (ClippingEdges.createDefaultIfcStyles) {
@@ -58067,14 +58099,13 @@ class IfcPlane$1 extends IfcComponent {
             this.helper.removeFromParent();
             this.arrowBoundingBox.removeFromParent();
             this.arrowBoundingBox.geometry.dispose();
-            // @ts-ignore
-            this.arrowBoundingBox.geometry = undefined;
+            this.arrowBoundingBox = undefined;
             this.planeMesh.geometry.dispose();
-            // @ts-ignore
             this.planeMesh.geometry = undefined;
             this.controls.removeFromParent();
             this.controls.dispose();
-            this.edges.remove();
+            this.edges.dispose();
+            this.helper.removeFromParent();
         };
         this.planeSize = planeSize;
         this.context = context;
@@ -58113,6 +58144,20 @@ class IfcPlane$1 extends IfcComponent {
         this.controls.visible = state;
         this.helper.visible = state;
         this.edges.visible = state;
+    }
+    dispose() {
+        if (IfcPlane$1.planeMaterial) {
+            IfcPlane$1.planeMaterial.dispose();
+            IfcPlane$1.planeMaterial = null;
+        }
+        if (IfcPlane$1.hiddenMaterial) {
+            IfcPlane$1.hiddenMaterial.dispose();
+            IfcPlane$1.hiddenMaterial = null;
+        }
+        this.removeFromScene();
+        this.edges.disposeStylesAndHelpers();
+        this.edges = null;
+        this.context = null;
     }
     newTransformControls() {
         const camera = this.context.getCamera();
@@ -58301,6 +58346,15 @@ class IfcClipper extends IfcComponent {
             plane.edgesActive = state;
         });
     }
+    toggle() {
+        this.active = !this.active;
+    }
+    dispose() {
+        this.planes.forEach((plane) => plane.dispose());
+        this.planes.length = 0;
+        this.context = null;
+        this.ifc = null;
+    }
     normalizePlaneDirectionY(normal) {
         if (this.orthogonalY) {
             if (normal.y > this.toleranceOrthogonalY) {
@@ -58329,12 +58383,34 @@ class IfcClipper extends IfcComponent {
     }
 }
 
+[new Vector3(), new Vector3(), new Vector3()];
+function disposeMeshRecursively(mesh) {
+    mesh.removeFromParent();
+    if (mesh.geometry)
+        mesh.geometry.dispose();
+    if (mesh.material) {
+        if (Array.isArray(mesh.material))
+            mesh.material.forEach((mat) => mat.dispose());
+        else
+            mesh.material.dispose();
+    }
+    if (mesh.children && mesh.children.length) {
+        mesh.children.forEach((child) => disposeMeshRecursively(child));
+    }
+    mesh.children.length = 0;
+}
+
 class SectionFillManager {
     constructor(IFC, context) {
         this.IFC = IFC;
         this.context = context;
         this.existMessage = 'The specified fill already exists';
         this.fills = {};
+    }
+    dispose() {
+        const fills = Object.values(this.fills);
+        fills.forEach((fill) => disposeMeshRecursively(fill));
+        this.fills = null;
     }
     create(name, modelID, ids, material) {
         if (this.fills[name] !== undefined)
@@ -58415,6 +58491,10 @@ class IfcUnits {
         this.allUnits = {};
         this.ifc = ifc;
     }
+    dispose() {
+        this.allUnits = null;
+        this.ifc = null;
+    }
     async getUnits(modelID, type) {
         if (!this.allUnits[modelID]) {
             await this.getUnitsOfModel(modelID);
@@ -58457,6 +58537,12 @@ class PlanManager {
         this.previousTarget = new Vector3();
         this.previousProjection = CameraProjections.Perspective;
         this.sectionFill = new Mesh();
+    }
+    dispose() {
+        disposeMeshRecursively(this.sectionFill);
+        this.sectionFill = null;
+        this.storeys = null;
+        this.planLists = null;
     }
     getAll(modelID) {
         const currentPlans = this.planLists[modelID];
@@ -58619,6 +58705,10 @@ class IfcGrid$1 extends IfcComponent {
         super(context);
         this.context = context;
     }
+    dispose() {
+        disposeMeshRecursively(this.grid);
+        this.grid = null;
+    }
     setGrid(size, divisions, colorCenterLine, colorGrid) {
         if (this.grid) {
             if (this.grid.parent)
@@ -58637,6 +58727,10 @@ class IfcAxes extends IfcComponent {
         super(context);
         this.context = context;
     }
+    dispose() {
+        disposeMeshRecursively(this.axes);
+        this.axes = null;
+    }
     setAxes(size) {
         if (this.axes) {
             if (this.axes.parent)
@@ -58648,23 +58742,6 @@ class IfcAxes extends IfcComponent {
         this.axes.renderOrder = 2;
         const scene = this.context.getScene();
         scene.add(this.axes);
-    }
-}
-
-class IfcStats extends IfcComponent {
-    initializeStats(Stats) {
-        this.stats = new Stats();
-        this.stats.showPanel(0);
-    }
-    update(_delta) {
-        if (this.stats) {
-            this.stats.update();
-        }
-    }
-    addStats(css = '') {
-        if (css.length > 0)
-            this.stats.dom.style.cssText = css;
-        document.body.appendChild(this.stats.dom);
     }
 }
 
@@ -58897,6 +58974,31 @@ class IfcDimensionLine {
         this.context.ifcCamera.onChange.on(() => this.rescaleObjectsToCameraPosition());
         this.rescaleObjectsToCameraPosition();
     }
+    dispose() {
+        this.removeFromScene();
+        this.context = null;
+        disposeMeshRecursively(this.root);
+        this.root = null;
+        disposeMeshRecursively(this.line);
+        this.line = null;
+        this.endpointMeshes.forEach((mesh) => disposeMeshRecursively(mesh));
+        this.endpointMeshes.length = 0;
+        this.axis.dispose();
+        this.axis = null;
+        this.endpoint.dispose();
+        this.endpoint = null;
+        this.textLabel.removeFromParent();
+        this.textLabel.element.remove();
+        this.textLabel = null;
+        this.lineMaterial.dispose();
+        this.lineMaterial = null;
+        this.endpointMaterial.dispose();
+        this.endpointMaterial = null;
+        if (this.boundingMesh) {
+            disposeMeshRecursively(this.boundingMesh);
+            this.boundingMesh = null;
+        }
+    }
     get boundingBox() {
         return this.boundingMesh;
     }
@@ -59042,6 +59144,17 @@ class IfcDimensions extends IfcComponent {
         htmlPreview.className = this.previewClassName;
         this.previewElement = new CSS2DObject(htmlPreview);
         this.previewElement.visible = false;
+    }
+    dispose() {
+        this.context = null;
+        this.dimensions.forEach((dim) => dim.dispose());
+        this.dimensions = null;
+        this.currentDimension = null;
+        this.endpoint.dispose();
+        this.endpoint = null;
+        this.previewElement.removeFromParent();
+        this.previewElement.element.remove();
+        this.previewElement = null;
     }
     update(_delta) {
         if (this.enabled && this.preview) {
@@ -59233,6 +59346,20 @@ class Edges {
         material.polygonOffset = true;
         material.polygonOffsetFactor = 1;
         material.polygonOffsetUnits = 1;
+    }
+    dispose() {
+        const allEdges = Object.values(this.edges);
+        allEdges.forEach((item) => {
+            disposeMeshRecursively(item.edges);
+            if (Array.isArray(item.originalMaterials)) {
+                item.originalMaterials.forEach((mat) => mat.dispose());
+            }
+            else
+                item.originalMaterials.dispose();
+            if (item.baseMaterial)
+                item.baseMaterial.dispose();
+        });
+        this.edges = null;
     }
     getAll() {
         return Object.keys(this.edges);
@@ -106623,16 +106750,19 @@ function mergeBufferAttributes( attributes ) {
 
 }
 
-let modelIdCounter = 0;
 const nullIfcManagerErrorMessage = 'IfcManager is null!';
 
 class IFCModel extends Mesh {
 
   constructor() {
     super(...arguments);
-    this.modelID = modelIdCounter++;
+    this.modelID = IFCModel.modelIdCounter++;
     this.ifcManager = null;
     this.mesh = this;
+  }
+
+  static dispose() {
+    IFCModel.modelIdCounter = 0;
   }
 
   setIFCManager(manager) {
@@ -106716,6 +106846,8 @@ class IFCModel extends Mesh {
   }
 
 }
+
+IFCModel.modelIdCounter = 0;
 
 class IFCParser {
 
@@ -106944,6 +107076,14 @@ class ItemsMap {
     return `${baseID} - ${materialID} - ${customID}`;
   }
 
+  dispose() {
+    Object.values(this.map).forEach(model => {
+      model.indexCache = null;
+      model.map = null;
+    });
+    this.map = null;
+  }
+
   getGeometry(modelID) {
     const geometry = this.state.models[modelID].mesh.geometry;
     if (!geometry)
@@ -107069,6 +107209,10 @@ class SubsetCreator {
     if (config.scene)
       config.scene.add(subset);
     return this.subsets[subsetID].mesh;
+  }
+
+  dispose() {
+    this.tempIndex = [];
   }
 
   initializeSubset(config, subsetID) {
@@ -107224,6 +107368,27 @@ class SubsetManager {
     subset.geometry.setIndex([]);
   }
 
+  dispose() {
+    this.items.dispose();
+    this.subsetCreator.dispose();
+    Object.values(this.subsets).forEach(subset => {
+      subset.ids = null;
+      subset.mesh.removeFromParent();
+      const mats = subset.mesh.material;
+      if (Array.isArray(mats))
+        mats.forEach(mat => mat.dispose());
+      else
+        mats.dispose();
+      subset.mesh.geometry.index = null;
+      subset.mesh.geometry.dispose();
+      const geom = subset.mesh.geometry;
+      if (geom.disposeBoundsTree)
+        geom.disposeBoundsTree();
+      subset.mesh = null;
+    });
+    this.subsets = null;
+  }
+
   getSubsetID(modelID, material, customID = 'DEFAULT') {
     const baseID = modelID;
     const materialID = material ? material.uuid : 'DEFAULT';
@@ -107374,7 +107539,7 @@ class BasePropertyManager {
 
 }
 
-const IfcElements = {
+let IfcElements = {
   103090709: 'IFCPROJECT',
   4097777520: 'IFCSITE',
   4031249490: 'IFCBUILDING',
@@ -107579,7 +107744,7 @@ class WebIfcPropertyManager extends BasePropertyManager {
 
 }
 
-const IfcTypesMap = {
+let IfcTypesMap = {
   3821786052: "IFCACTIONREQUEST",
   2296667514: "IFCACTOR",
   3630933823: "IFCACTORROLE",
@@ -108633,7 +108798,9 @@ var WorkerActions;
   WorkerActions["updateModelStateTypes"] = "updateModelStateTypes";
   WorkerActions["updateModelStateJsonData"] = "updateModelStateJsonData";
   WorkerActions["loadJsonDataFromWorker"] = "loadJsonDataFromWorker";
+  WorkerActions["dispose"] = "dispose";
   WorkerActions["Close"] = "Close";
+  WorkerActions["DisposeWebIfc"] = "DisposeWebIfc";
   WorkerActions["Init"] = "Init";
   WorkerActions["OpenModel"] = "OpenModel";
   WorkerActions["CreateModel"] = "CreateModel";
@@ -109389,6 +109556,12 @@ class IFCWorkerHandler {
     });
   }
 
+  async terminate() {
+    await this.request(WorkerAPIs.workerState, WorkerActions.dispose);
+    await this.request(WorkerAPIs.webIfc, WorkerActions.DisposeWebIfc);
+    this.ifcWorker.terminate();
+  }
+
   async Close() {
     await this.request(WorkerAPIs.webIfc, WorkerActions.Close);
   }
@@ -109440,6 +109613,31 @@ class IFCWorkerHandler {
 
 }
 
+class MemoryCleaner {
+
+  constructor(state) {
+    this.state = state;
+  }
+
+  async dispose() {
+    Object.keys(this.state.models).forEach(modelID => {
+      const model = this.state.models[parseInt(modelID, 10)];
+      model.mesh.removeFromParent();
+      const geom = model.mesh.geometry;
+      if (geom.disposeBoundsTree)
+        geom.disposeBoundsTree();
+      geom.dispose();
+      model.mesh.material.forEach(mat => mat.dispose());
+      model.mesh = null;
+      model.types = null;
+      model.jsonData = null;
+    });
+    this.state.api = null;
+    this.state.models = null;
+  }
+
+}
+
 class IFCManager {
 
   constructor() {
@@ -109457,6 +109655,7 @@ class IFCManager {
     this.subsets = new SubsetManager(this.state, this.BVH);
     this.properties = new PropertyManager(this.state);
     this.types = new TypeManager(this.state);
+    this.cleaner = new MemoryCleaner(this.state);
   }
 
   get ifcAPI() {
@@ -109467,12 +109666,13 @@ class IFCManager {
     var _a;
     const model = await this.parser.parse(buffer, (_a = this.state.coordinationMatrix) === null || _a === void 0 ? void 0 : _a.toArray());
     model.setIFCManager(this);
-    this.state.useJSON ? await this.disposeMemory() : await this.types.getAllTypes(this.worker);
+    await this.types.getAllTypes(this.worker);
     return model;
   }
 
   async setWasmPath(path) {
     this.state.api.SetWasmPath(path);
+    this.state.wasmPath = path;
   }
 
   setupThreeMeshBVH(computeBoundsTree, disposeBoundsTree, acceleratedRaycast) {
@@ -109508,6 +109708,9 @@ class IFCManager {
       this.state.worker.active = active;
       this.state.worker.path = path;
       await this.initializeWorkers();
+      const wasm = this.state.wasmPath;
+      if (wasm)
+        await this.setWasmPath(wasm);
     } else {
       this.state.api = new IfcAPI2();
     }
@@ -109600,11 +109803,21 @@ class IFCManager {
     return this.subsets.clearSubset(modelID, customID, material);
   }
 
+  async dispose() {
+    IFCModel.dispose();
+    await this.cleaner.dispose();
+    this.subsets.dispose();
+    if (this.worker && this.state.worker.active)
+      await this.worker.terminate();
+    this.state = null;
+  }
+
   async disposeMemory() {
     var _a;
     if (this.state.worker.active) {
       await ((_a = this.worker) === null || _a === void 0 ? void 0 : _a.Close());
     } else {
+      this.state.api.Close();
       this.state.api = null;
       this.state.api = new IfcAPI2();
     }
@@ -109709,6 +109922,17 @@ class IfcSelection extends IfcComponent {
         this.selected = -1;
         this.modelID = -1;
     }
+    dispose() {
+        var _a, _b, _c;
+        (_a = this.mesh) === null || _a === void 0 ? void 0 : _a.removeFromParent();
+        (_b = this.mesh) === null || _b === void 0 ? void 0 : _b.geometry.dispose();
+        (_c = this.material) === null || _c === void 0 ? void 0 : _c.dispose();
+        this.mesh = null;
+        this.material = null;
+        this.scene = null;
+        this.loader = null;
+        this.context = null;
+    }
     unpick() {
         this.mesh = null;
         this.loader.ifcManager.removeSubset(this.modelID, this.material);
@@ -109736,6 +109960,21 @@ class IfcSelector {
         this.preselection = new IfcSelection(context, this.ifc.loader, this.defPreselectMat);
         this.selection = new IfcSelection(context, this.ifc.loader, this.defSelectMat);
         this.highlight = new IfcSelection(context, this.ifc.loader);
+    }
+    dispose() {
+        var _a, _b, _c;
+        (_a = this.defPreselectMat) === null || _a === void 0 ? void 0 : _a.dispose();
+        this.defHighlightMat = null;
+        (_b = this.defSelectMat) === null || _b === void 0 ? void 0 : _b.dispose();
+        this.defSelectMat = null;
+        (_c = this.defHighlightMat) === null || _c === void 0 ? void 0 : _c.dispose();
+        this.defHighlightMat = null;
+        this.preselection.dispose();
+        this.preselection = null;
+        this.selection.dispose();
+        this.selection = null;
+        this.highlight.dispose();
+        this.highlight = null;
     }
     /**
      * Highlights the item pointed by the cursor.
@@ -109879,6 +110118,11 @@ class IfcProperties {
         this.context = context;
         this.loader = loader;
     }
+    dispose() {
+        this.context = null;
+        this.loader = null;
+        this.webIfc = null;
+    }
     /**
      * Serializes all the properties of an IFC (exluding the geometry) into an array of Blobs.
      * This is useful for populating databases with IFC data.
@@ -109886,14 +110130,12 @@ class IfcProperties {
      * @maxSize (optional) maximum number of entities for each Blob. If not defined, it's infinite (only one Blob will be created).
      * @event (optional) callback called every time a 10% of entities are serialized into Blobs.
      */
-    async serializeAllProperties(modelID, maxSize, event) {
-        if (!this.webIfc)
-            this.webIfc = this.loader.ifcManager.ifcAPI;
-        const model = this.context.items.ifcModels.find((model) => model.modelID === modelID);
+    async serializeAllProperties(model, maxSize, event) {
+        this.webIfc = this.loader.ifcManager.ifcAPI;
         if (!model)
             throw new Error('The requested model was not found.');
         const blobs = [];
-        await this.getPropertiesAsBlobs(modelID, blobs, maxSize, event);
+        await this.getPropertiesAsBlobs(model.modelID, blobs, maxSize, event);
         return blobs;
     }
     async getPropertiesAsBlobs(modelID, blobs, maxSize, event) {
@@ -109973,6 +110215,17 @@ class IfcManager extends IfcComponent {
         this.selector = new IfcSelector(context, this);
         this.units = new IfcUnits(this);
         this.properties = new IfcProperties(context, this.loader);
+    }
+    async dispose() {
+        this.context = null;
+        this.selector.dispose();
+        this.selector = null;
+        this.units.dispose();
+        this.units = null;
+        this.properties.dispose();
+        this.properties = null;
+        await this.loader.ifcManager.dispose();
+        this.loader = null;
     }
     /**
      * Loads the given IFC in the current scene.
@@ -111879,6 +112132,17 @@ class IfcCamera extends IfcComponent {
         this.projectionManager = new ProjectionManager(context, this);
         this.setupControls();
     }
+    dispose() {
+        this.perspectiveCamera.removeFromParent();
+        this.perspectiveCamera = null;
+        this.orthographicCamera.removeFromParent();
+        this.orthographicCamera = null;
+        this.cameraControls.dispose();
+        this.cameraControls = null;
+        this.navMode = null;
+        this.context = null;
+        this.projectionManager = null;
+    }
     get projection() {
         return this.projectionManager.projection;
     }
@@ -111985,6 +112249,11 @@ class IfcRaycaster extends IfcComponent {
         this.raycaster = new Raycaster();
         this.mouse = new IfcMouse(context);
     }
+    dispose() {
+        this.raycaster = null;
+        this.mouse = null;
+        this.context = null;
+    }
     castRay(items) {
         const camera = this.context.getCamera();
         this.raycaster.setFromCamera(this.mouse.position, camera);
@@ -112017,6 +112286,10 @@ class IfcEvents {
                 actions: []
             }
         };
+    }
+    dispose() {
+        this.events.onCameraReady.actions.length = 0;
+        this.events = null;
     }
     subscribe(event, action) {
         this.events[event].actions.push(action);
@@ -112051,6 +112324,19 @@ class IfcPostproduction {
             depth: false
         });
         this.renderer.localClippingEnabled = true;
+    }
+    dispose() {
+        this.renderer.dispose();
+        if (this.initialized) {
+            this.renderer = null;
+            this.BlendFunction = null;
+            this.EffectComposer = null;
+            this.EffectPass = null;
+            this.NormalPass = null;
+            this.RenderPass = null;
+            this.SSAOEffect = null;
+            this.composer = null;
+        }
     }
     get domElement() {
         return this.renderer.domElement;
@@ -112148,6 +112434,17 @@ class IfcRenderer extends IfcComponent {
         if (!active)
             this.restoreRendererBackgroundColor();
     }
+    dispose() {
+        this.basicRenderer.domElement.remove();
+        this.basicRenderer.dispose();
+        this.postProductionRenderer.dispose();
+        this.basicRenderer = null;
+        this.renderer2D = null;
+        this.postProductionRenderer = null;
+        this.renderer = null;
+        this.container = null;
+        this.context = null;
+    }
     update(_delta) {
         const scene = this.context.getScene();
         const camera = this.context.getCamera();
@@ -112202,6 +112499,10 @@ class IfcScene extends IfcComponent {
         this.scene = new Scene();
         this.setupScene(context.options);
         this.setupLights();
+    }
+    dispose() {
+        this.scene.children.length = 0;
+        this.scene = null;
     }
     add(item) {
         this.scene.add(item);
@@ -117633,6 +117934,9 @@ class Animator {
     constructor() {
         this.transformer = gsapWithCSS;
     }
+    dispose() {
+        this.transformer = null;
+    }
     move(vector, transform, duration = 1, delay = 0) {
         const x = transform.x;
         const y = transform.y;
@@ -117643,9 +117947,20 @@ class Animator {
 
 class IfcContext {
     constructor(options) {
+        this.stats = null;
+        this.isThisBeingDisposed = false;
         this.render = () => {
+            if (this.isThisBeingDisposed)
+                return;
+            if (this.stats)
+                this.stats.begin();
             requestAnimationFrame(this.render);
             this.updateAllComponents();
+            if (this.stats)
+                this.stats.end();
+        };
+        this.resize = () => {
+            this.updateAspect();
         };
         if (!options.container)
             throw new Error('Could not get container element!');
@@ -117662,6 +117977,43 @@ class IfcContext {
         this.ifcAnimator = new Animator();
         this.setupWindowRescale();
         this.render();
+    }
+    dispose() {
+        var _a, _b, _c;
+        this.isThisBeingDisposed = true;
+        (_a = this.stats) === null || _a === void 0 ? void 0 : _a.dom.remove();
+        (_b = this.options.preselectMaterial) === null || _b === void 0 ? void 0 : _b.dispose();
+        (_c = this.options.selectMaterial) === null || _c === void 0 ? void 0 : _c.dispose();
+        this.options = null;
+        this.items.components.length = 0;
+        this.items.ifcModels.forEach((model) => {
+            model.removeFromParent();
+            if (model.geometry.boundsTree)
+                model.geometry.disposeBoundsTree();
+            model.geometry.dispose();
+            if (Array.isArray(model.material))
+                model.material.forEach((mat) => mat.dispose());
+            else
+                model.material.dispose();
+        });
+        this.items.ifcModels.length = 0;
+        this.items.pickableIfcModels.length = 0;
+        this.items = null;
+        this.ifcCamera.dispose();
+        this.ifcCamera = null;
+        this.scene.dispose();
+        this.scene = null;
+        this.renderer.dispose();
+        this.renderer = null;
+        this.events.dispose();
+        this.events = null;
+        this.ifcCaster.dispose();
+        this.ifcCaster = null;
+        this.ifcAnimator.dispose();
+        this.ifcAnimator = null;
+        this.clock = null;
+        this.clippingPlanes.length = 0;
+        this.unsetWindowRescale();
     }
     getScene() {
         return this.scene.scene;
@@ -117748,9 +118100,10 @@ class IfcContext {
         this.items.components.forEach((component) => component.update(delta));
     }
     setupWindowRescale() {
-        window.addEventListener('resize', () => {
-            this.updateAspect();
-        });
+        window.addEventListener('resize', this.resize);
+    }
+    unsetWindowRescale() {
+        window.removeEventListener('resize', this.resize);
     }
     newItems() {
         return {
@@ -124633,6 +124986,16 @@ class GLTFManager extends IfcComponent {
             maxTextureSize: 0
         };
     }
+    dispose() {
+        this.loader = null;
+        this.exporter = null;
+        const models = Object.values(this.GLTFModels);
+        models.forEach((model) => {
+            model.removeFromParent();
+            model.children.forEach((child) => disposeMeshRecursively(child));
+        });
+        this.GLTFModels = null;
+    }
     /**
      * Loads any glTF file into the scene using [Three.js loader](https://threejs.org/docs/#examples/en/loaders/GLTFLoader).
      * @url The URL of the GLTF file to load
@@ -124659,6 +125022,36 @@ class GLTFManager extends IfcComponent {
         return gltfMesh;
     }
     /**
+     * Exports the specified IFC file (or file subset) as glTF.
+     * @fileURL The URL of the IFC file to convert to glTF
+     * @ids (optional) The ids of the items to export. If not defined, the full model is exported
+     */
+    async exportIfcFileAsGltf(ifcFileUrl, getProperties = false, ids, onProgress) {
+        const tempLoader = new IFCLoader();
+        const state = this.IFC.loader.ifcManager.state;
+        if (state.wasmPath)
+            await tempLoader.ifcManager.setWasmPath(state.wasmPath);
+        if (state.worker.active)
+            await tempLoader.ifcManager.useWebWorkers(true, state.worker.path);
+        if (state.webIfcSettings)
+            await tempLoader.ifcManager.applyWebIfcConfig(state.webIfcSettings);
+        const model = await tempLoader.loadAsync(ifcFileUrl, onProgress);
+        const result = {};
+        if (ids)
+            result.gltf = await this.exportModelPartToGltf(model, ids);
+        else
+            result.gltf = await this.exportMeshToGltf(model);
+        if (getProperties) {
+            const previousLoader = this.IFC.properties.loader;
+            this.IFC.properties.loader = tempLoader;
+            const blobs = await this.IFC.properties.serializeAllProperties(model);
+            result.json = new File(blobs, 'properties.json');
+            this.IFC.properties.loader = previousLoader;
+        }
+        await tempLoader.ifcManager.dispose();
+        return result;
+    }
+    /**
      * Exports the specified model (or model subset) as glTF.
      * @modelID The ID of the IFC model to convert to glTF
      * @ids (optional) The ids of the items to export. If not defined, the full model is exported
@@ -124667,10 +125060,7 @@ class GLTFManager extends IfcComponent {
         const model = this.context.items.ifcModels.find((model) => model.modelID === modelID);
         if (!model)
             throw new Error('The specified model does not exist!');
-        if (ids) {
-            return this.exportModelPartToGltf(model, ids);
-        }
-        return this.exportMeshToGltf(model);
+        return ids ? this.exportModelPartToGltf(model, ids) : this.exportMeshToGltf(model);
     }
     // TODO: Split up in smaller methods
     exportModelPartToGltf(model, ids) {
@@ -124744,7 +125134,7 @@ class GLTFManager extends IfcComponent {
     // Necessary to make the glTF work as a model
     setupMeshAsModel(newMesh) {
         // TODO: In the future we might want to rethink this or at least fix the typings
-        this.IFC.loader.ifcManager.state.models[0] = { mesh: newMesh };
+        this.IFC.loader.ifcManager.state.models[newMesh.modelID] = { mesh: newMesh };
         const items = this.context.items;
         items.ifcModels.push(newMesh);
         items.pickableIfcModels.push(newMesh);
@@ -124944,6 +125334,22 @@ class ShadowDropper {
         this.IFC = IFC;
         this.initializeDepthMaterial();
     }
+    dispose() {
+        const allShadows = Object.values(this.shadows);
+        allShadows.forEach((shadow) => {
+            disposeMeshRecursively(shadow.root);
+            disposeMeshRecursively(shadow.blurPlane);
+            shadow.rt.dispose();
+            shadow.rtBlur.dispose();
+        });
+        this.shadows = null;
+        this.tempMaterial.dispose();
+        this.tempMaterial = null;
+        this.depthMaterial.dispose();
+        this.depthMaterial = null;
+        this.context = null;
+        this.IFC = null;
+    }
     async renderShadow(modelID) {
         const { size, center } = this.getSizeAndCenter(modelID);
         const scene = this.context.getScene();
@@ -125074,7 +125480,10 @@ class ShadowDropper {
         return new OrthographicCamera(-size.x / 2, size.x / 2, size.z / 2, -size.z / 2, 0, this.cameraHeight);
     }
     getSizeAndCenter(modelID) {
-        const geometry = this.context.items.ifcModels[modelID].geometry;
+        const model = this.context.items.ifcModels.find((model) => model.modelID === modelID);
+        if (!model)
+            throw new Error('The requested model was not found.');
+        const geometry = model.geometry;
         geometry.computeBoundingBox();
         if (geometry.boundingBox) {
             const size = new Vector3();
@@ -125130,6 +125539,9 @@ class DXFWriter {
         this.drawings = {};
         this.Drawing = null;
     }
+    dispose() {
+        this.drawings = null;
+    }
     initializeJSDXF(drawing) {
         this.Drawing = drawing;
     }
@@ -125176,7 +125588,7 @@ class DXFWriter {
             for (let j = 0; j < polygon.length - 3; j += 2) {
                 const start = [polygon[j], polygon[j + 1]];
                 const end = [polygon[j + 2], polygon[j + 3]];
-                currentDrawing.drawPolyline([start[0], start[1], end[0], end[1]]);
+                currentDrawing.drawPolyline([start, end]);
             }
         }
     }
@@ -125184,12 +125596,13 @@ class DXFWriter {
         const currentDrawing = this.drawings[drawingName];
         if (!currentDrawing)
             throw new Error(`There is no drawing with id: ${drawingName}`);
-        const saveLink = document.createElement('a');
         const serialized = currentDrawing.toDxfString();
-        const blob = new Blob([serialized], { type: 'application/dxf' });
-        saveLink.href = URL.createObjectURL(blob);
-        saveLink.download = 'data.dxf';
-        saveLink.click();
+        return new Blob([serialized], { type: 'application/dxf' });
+        // const saveLink = document.createElement('a');
+        // saveLink.href = URL.createObjectURL(blob);
+        // saveLink.download = 'data.dxf';
+        // saveLink.click();
+        // saveLink.remove();
     }
 }
 
@@ -125197,6 +125610,9 @@ class PDFWriter {
     constructor() {
         this.documents = {};
         this.errorText = 'The specified document does not exist.';
+    }
+    dispose() {
+        this.documents = null;
     }
     setLineWidth(id, lineWidth) {
         const document = this.getDocument(id);
@@ -125260,12 +125676,19 @@ class EdgesVectorizer {
         this.currentBucketIndex = 0;
         this.dims = { pixels: new Vector2(), real: new Vector2() };
         this.bucketMesh = new Mesh(new BoxGeometry(1, 1, 1));
-        this.trueCamera = context.ifcCamera.orthographicCamera;
-        this.cvCamera = this.trueCamera.clone(false);
+        this.cvCamera = context.ifcCamera.orthographicCamera.clone(false);
         this.controls = context.ifcCamera.cameraControls;
         // Every time the html image is updated, its vertices are processed by opencv
         this.htmlImage = document.createElement('img');
         this.htmlImage.onload = () => this.getEdges2DPoints();
+    }
+    dispose() {
+        this.cv = null;
+        this.cvCamera.removeFromParent();
+        this.cvCamera = null;
+        this.controls = null;
+        disposeMeshRecursively(this.bucketMesh);
+        this.htmlImage.remove();
     }
     initializeOpenCV(openCV) {
         this.cv = openCV;
@@ -125280,7 +125703,7 @@ class EdgesVectorizer {
         await this.renderBucket();
     }
     setupCamera() {
-        this.cvCamera.copy(this.trueCamera);
+        this.cvCamera.copy(this.context.ifcCamera.orthographicCamera);
         this.controls.saveState();
         this.controls.camera = this.cvCamera;
     }
@@ -125415,7 +125838,7 @@ class EdgesVectorizer {
         else {
             this.toggleVisibility(true);
             await this.controls.reset(false);
-            this.controls.camera = this.trueCamera;
+            this.controls.camera = this.context.getCamera();
         }
     }
 }
@@ -125423,45 +125846,48 @@ class EdgesVectorizer {
 class IfcViewerAPI {
     constructor(options) {
         /**
+         * @deprecated Use `IfcViewerAPI.clipper.createPlane()` instead.
          * Adds a clipping plane on the face pointed to by the cursor.
          */
         this.addClippingPlane = () => {
             this.clipper.createPlane();
         };
         /**
+         * @deprecated Use `IfcViewerAPI.clipper.deletePlane()` instead.
          * Removes the clipping plane pointed by the cursor.
          */
         this.removeClippingPlane = () => {
             this.clipper.deletePlane();
         };
         /**
+         * @deprecated Use `IfcViewerAPI.clipper.toggle()` instead.
          * Turns on / off all clipping planes.
          */
         this.toggleClippingPlanes = () => {
-            this.clipper.active = !this.clipper.active;
+            this.clipper.toggle();
         };
         /**
-         * @deprecated Use `IfcViewerAPI.IFC.prePickIfcItem()` instead.
+         * @deprecated Use `IfcViewerAPI.IFC.selector.prePickIfcItem()` instead.
          * Highlights the item pointed by the cursor.
          */
         this.prePickIfcItem = () => {
-            this.IFC.prePickIfcItem();
+            this.IFC.selector.prePickIfcItem();
         };
         /**
-         * @deprecated Use `IfcViewerAPI.IFC.pickIfcItem()` instead.
+         * @deprecated Use `IfcViewerAPI.IFC.selector.pickIfcItem()` instead.
          * Highlights the item pointed by the cursor and gets is properties.
          */
         this.pickIfcItem = () => {
-            return this.IFC.pickIfcItem();
+            return this.IFC.selector.pickIfcItem();
         };
         /**
-         * @deprecated Use `IfcViewerAPI.IFC.pickIfcItemsByID()` instead.
+         * @deprecated Use `IfcViewerAPI.IFC.selector.pickIfcItemsByID()` instead.
          * Highlights the item with the given ID.
          * @modelID ID of the IFC model.
          * @id Express ID of the item.
          */
         this.pickIfcItemsByID = (modelID, ids) => {
-            this.IFC.pickIfcItemsByID(modelID, ids);
+            this.IFC.selector.pickIfcItemsByID(modelID, ids);
         };
         if (!options.container)
             throw new Error('Could not get container element!');
@@ -125479,30 +125905,14 @@ class IfcViewerAPI {
         this.dxf = new DXFWriter();
         this.pdf = new PDFWriter();
         this.GLTF = new GLTFManager(this.context, this.IFC);
+        this.dropbox = new DropboxAPI(this.context, this.IFC);
     }
     /**
-     * Adds [stats](https://github.com/mrdoob/stats.js/) to the scene for testing purposes. For example:
-     * ```js
-     *     this.loader.addStats('position:fixed;top:6rem;right:0px;z-index:1;');
-     * ```
-     * @css The css text to control where to locate the stats.
-     * @stats The stats.js API object
-     */
-    addStats(css = '', stats) {
-        var _a, _b;
-        // @ts-ignore
-        this.stats = new IfcStats(this.context);
-        (_a = this.stats) === null || _a === void 0 ? void 0 : _a.initializeStats(stats);
-        (_b = this.stats) === null || _b === void 0 ? void 0 : _b.addStats(css);
-    }
-    /**
+     * @deprecated Use `this.dropbox.loadDropboxIfc()` instead.
      * Opens a dropbox window where the user can select their IFC models.
      */
     openDropboxWindow() {
-        var _a;
-        if (!this.dropbox)
-            this.dropbox = new DropboxAPI(this.context, this.IFC);
-        (_a = this.dropbox) === null || _a === void 0 ? void 0 : _a.loadDropboxIfc();
+        this.dropbox.loadDropboxIfc();
     }
     /**
      * @deprecated Use `IfcViewerAPI.IFC.loadIfc()` instead.
@@ -125595,10 +126005,44 @@ class IfcViewerAPI {
         return this.IFC.getAllItemsOfType(modelID, type, verbose);
     }
     /**
-     * TODO: Method to delete all data
-     * Needs to be implemented yet
+     * Releases all the memory allocated by IFC.js.
+     * Use this only when deleting the ifcViewerAPI instance.
+     * This is especially important when using libraries and frameworks that handle the lifecycle
+     * of objects automatically (e.g. React, Angular, etc). If you are using one of these and are
+     * instantiating webIfcViewer inside a component, make sure you use this method in the component
+     * destruction event.
      */
-    releaseAllMemory() { }
+    async dispose() {
+        this.grid.dispose();
+        this.grid = null;
+        this.axes.dispose();
+        this.axes = null;
+        this.context.dispose();
+        this.context = null;
+        this.clipper.dispose();
+        this.clipper = null;
+        this.plans.dispose();
+        this.plans = null;
+        this.filler.dispose();
+        this.filler = null;
+        this.dimensions.dispose();
+        this.dimensions = null;
+        this.edges.dispose();
+        this.edges = null;
+        this.shadowDropper.dispose();
+        this.shadowDropper = null;
+        this.dxf.dispose();
+        this.dxf = null;
+        this.pdf.dispose();
+        this.pdf = null;
+        this.edgesVectorizer.dispose();
+        this.edgesVectorizer = null;
+        this.dropbox = null;
+        this.GLTF.dispose();
+        this.GLTF = null;
+        await this.IFC.dispose();
+        this.IFC = null;
+    }
 }
 
 const container = document.getElementById('viewer-container');
@@ -125639,5 +126083,14 @@ window.ondblclick = async () => {
         const { modelID, id } = result;
         const props = await viewer.IFC.loader.ifcManager.getItemProperties(modelID, id, true);
         console.log(props);
+    }
+};
+
+window.onkeydown = async (event) => {
+    if (event.code === "Delete" || event.code === "BackSpace") {
+        viewer.clipper.deleteAllPlanes();
+        viewer.dimensions.delete();
+    } else if (event.code === "Escape") {
+        viewer.IFC.selector.unpickIfcItems();
     }
 };

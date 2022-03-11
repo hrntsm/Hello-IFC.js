@@ -40,3 +40,12 @@ window.ondblclick = async () => {
         console.log(props);
     }
 }
+
+window.onkeydown = async (event) => {
+    if (event.code === "Delete" || event.code === "BackSpace") {
+        viewer.clipper.deleteAllPlanes();
+        viewer.dimensions.delete();
+    } else if (event.code === "Escape") {
+        viewer.IFC.selector.unpickIfcItems();
+    }
+}
